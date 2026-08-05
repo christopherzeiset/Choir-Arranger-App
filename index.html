@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Choir Arranger Web</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; background: #f4f6f8; user-select: none; }
+        
+        #menubar { background: #ecf0f1; display: flex; padding: 0 10px; font-size: 14px; position: relative; z-index: 2000; }
+        .menu-item { position: relative; padding: 8px 15px; cursor: pointer; color: #2c3e50; }
+        .menu-item:hover { background: #bdc3c7; }
+        .dropdown { display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #bdc3c7; box-shadow: 0 4px 6px rgba(0,0,0,0.1); min-width: 200px; z-index: 2000; }
+        .menu-item:hover .dropdown { display: block; }
+        .dropdown div { padding: 8px 15px; cursor: pointer; color: #333; }
+        .dropdown div:hover { background: #3498db; color: white; }
+        .dropdown hr { border: 0; border-top: 1px solid #eee; margin: 5px 0; }
+        
+        #tab-bar { background: #bdc3c7; display: flex; padding: 5px 10px 0 10px; gap: 2px; border-bottom: 1px solid #95a5a6; position: relative; z-index: 1999; }
+        .tab { background: #ecf0f1; padding: 6px 12px; border-radius: 6px 6px 0 0; cursor: pointer; color: #7f8c8d; font-size: 13px; display: flex; align-items: center; gap: 8px; border: 1px solid transparent; border-bottom: none; }
+        .tab:hover { background: #e0e6e8; color: #2c3e50; }
+        .tab.active { background: #f4f6f8; color: #2c3e50; font-weight: bold; border-color: #95a5a6; }
+        .close-tab { border-radius: 50%; width: 16px; height: 16px; display: flex; justify-content: center; align-items: center; font-size: 14px; line-height: 1; }
+        .close-tab:hover { background: #e74c3c; color: white; }
+        .add-tab { font-weight: bold; font-size: 16px; padding: 4px 10px; }
+
+        #stage { width: 100vw; height: calc(100vh - 65px); position: relative; overflow: hidden; }
+        #workspace { transform-origin: 0 0; position: absolute; top: 0; left: 0; width: 0; height: 0; }
+        
+        .seat {
+            position: absolute; width: 70px; height: 70px; border-radius: 50%;
+            border: 2px solid #2c3e50; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; font-size: 13px; font-weight: bold;
+            cursor: grab; box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+            transform: translate(-50%, -50%); text-align: center;
+        }
+        .seat:active { cursor: grabbing; box-shadow: 4px 4px 15px rgba(0,0,0,0.4); z-index: 1000 !important; }
+        .seat.gap { background: transparent !important; border: 2px dashed #95a5a6 !important; color: #95a5a6 !important; box-shadow: none; }
+
+        .overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 3000; justify-content: center; align-items: center; }
+        .modal { background: white; padding: 20px; border-radius: 8px; width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .modal h3 { margin-top: 0; }
+        .form-group { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+        .form-group input, .form-group select { width: 60%; padding: 5px; }
+        .modal-buttons { display: flex; justify-content: space-between; margin-top: 20px; }
+        .modal-buttons button { padding: 8px 15px; cursor: pointer; border: none; border-radius: 4px; }
+        .btn-save { background: #2ecc71; color: white; font-weight: bold; }
+        .btn-cancel { background: #95a5a6; color: white; }
+        .btn-delete { background: #e74c3c; color: white; font-weight: bold; width: 100%; margin-bottom: 10px;}
+        .col-buttons { flex-direction: column; gap: 10px; }
+        .col-buttons button { width: 100%; }
+    </style>
+</head>
+<body>
+
+<div id="menubar">
+    <div class="menu-item">File
+        <div class="dropdown">
+            <div onclick="promptNewLayout()">New Layout...</div>
+            <div onclick="openLayout()">Open Layout...</div>
+            <div onclick="saveLayout()">Save Layout</div>
+            <div onclick="saveLayoutAs()">Save Layout As...</div>
+            <hr>
+            <div onclick="document.getElementById('importCsv').click()">Import CSV...</div>
+            <div onclick="exportPDF()">Export to PDF...</div>
+        </div>
+    </div>
+    <div class="menu-item">Edit
+        <div class="dropdown">
+            <div onclick="addItems('Singer')">Add Singer...</div>
+            <div onclick="addItems('Gap')">Add Gap...</div>
+            <hr>
+            <div onclick="promptChangeRows()">Change Row Count...</div>
+            <div onclick="promptSpacing()">Adjust Layout Spacing...</div>
+            <hr>
+            <div onclick="autoArrange()">Auto-Arrange by Section</div>
+        </div>
+    </div>
+</div>
+
+<div id="tab-bar"></div>
+
+<div id="stage">
+    <div id="workspace"></div>
+</div>
+
+<input type="file" id="importCsv" accept=".csv" style="display:none" onchange="importCSV(event)">
+
+<div id="unsavedModal" class="overlay">
+    <div class="modal">
+        <h3>Unsaved Changes</h3>
+        <p id="unsavedText">You have unsaved changes. Do you want to save before closing?</p>
+        <div class="modal-buttons col-buttons">
+            <button class="btn-save" onclick="confirmCloseSave()">Save & Close</button>
+            <button class="btn-delete" onclick="confirmCloseDiscard()">Close Without Saving</button>
+            <button class="btn-cancel" onclick="closeModal('unsavedModal')">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div id="singerModal" class="overlay">
+    <div class="modal">
+        <h3>Singer Details</h3>
+        <button class="btn-delete" onclick="deleteSinger()">Delete Seat</button>
+        <div class="form-group"><label>Name:</label><input type="text" id="s_name"></div>
+        <div class="form-group"><label>Part:</label>
+            <select id="s_part">
+                <option>None</option><option>S1</option><option>S2</option><option>A1</option>
+                <option>A2</option><option>T1</option><option>T2</option><option>B1</option><option>B2</option>
+            </select>
+        </div>
+        <div class="form-group"><label>Height:</label><input type="text" id="s_height"></div>
+        <div class="form-group"><label>Notes:</label><input type="text" id="s_notes"></div>
+        <div class="modal-buttons">
+            <button class="btn-cancel" onclick="closeModal('singerModal')">Cancel</button>
+            <button class="btn-save" onclick="saveSingerDetails()">Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="spacingModal" class="overlay">
+    <div class="modal">
+        <h3>Adjust Layout Spacing</h3>
+        <div class="form-group"><label>Base Radius:</label><input type="number" id="m_radius"></div>
+        <div class="form-group"><label>Row Spacing:</label><input type="number" id="m_rowspace"></div>
+        <div class="form-group"><label>Seat Spacing:</label><input type="number" id="m_seatspace"></div>
+        <div class="modal-buttons">
+            <button class="btn-cancel" onclick="closeModal('spacingModal')">Cancel</button>
+            <button class="btn-save" onclick="saveSpacing()">Save</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- CONFIG ---
+    const PART_COLORS = { "S1": "#ADD8E6", "S2": "#87CEEB", "A1": "#FFB6C1", "A2": "#FF69B4", "T1": "#90EE90", "T2": "#3CB371", "B1": "#FFDAB9", "B2": "#F4A460", "None": "#D3D3D3" };
+    const PART_ORDER = { "S1": 1, "S2": 2, "A1": 3, "A2": 4, "T1": 5, "T2": 6, "B1": 7, "B2": 8, "None": 9, "Gap": 10 };
+
+    // --- TAB STATE MANAGEMENT ---
+    let tabs = [];
+    let activeTabIndex = 0;
+    let pendingCloseIndex = null;
+    
+    function getTab() { return tabs[activeTabIndex]; }
+
+    function createNewTab(title = "Untitled Layout", initialRows = null) {
+        let newTab = {
+            title: title,
+            fileHandle: null, // Stores the active file link for overwriting
+            baseRadius: 250, rowSpacing: 110, seatBuffer: 80,
+            rows: initialRows || [[], [], []],
+            isModified: false,
+            panX: window.innerWidth / 2,
+            panY: window.innerHeight - 100,
+            zoom: 1
+        };
+        tabs.push(newTab);
+        activeTabIndex = tabs.length - 1;
+        
+        if (!initialRows) {
+            let items = Array.from({length: 30}, () => ({ type: "Singer", name: "", part: "None" }));
+            distributeSeats(items, 3);
+        }
+        
+        renderTabs();
+        render();
+    }
+
+    function switchTab(index) {
+        activeTabIndex = index;
+        renderTabs();
+        updateCamera();
+        render();
+    }
+
+    function closeTab(index, event) {
+        event.stopPropagation(); 
+        let tab = tabs[index];
+        if (tab.isModified) {
+            pendingCloseIndex = index;
+            document.getElementById('unsavedText').innerText = `Save changes to "${tab.title}" before closing?`;
+            openModal('unsavedModal');
+        } else {
+            executeCloseTab(index);
+        }
+    }
+
+    function executeCloseTab(index) {
+        tabs.splice(index, 1);
+        if (tabs.length === 0) {
+            createNewTab();
+        } else {
+            activeTabIndex = Math.max(0, index - 1);
+            switchTab(activeTabIndex);
+        }
+    }
+
+    // Async function needed so it waits for the file to save before closing
+    async function confirmCloseSave() {
+        let index = pendingCloseIndex;
+        closeModal('unsavedModal');
+        switchTab(index);
+        let saved = await saveLayout();
+        if (saved) {
+            executeCloseTab(index);
+        }
+    }
+
+    function confirmCloseDiscard() {
+        let index = pendingCloseIndex;
+        closeModal('unsavedModal');
+        executeCloseTab(index);
+    }
+
+    function renderTabs() {
+        const tabBar = document.getElementById('tab-bar');
+        tabBar.innerHTML = '';
+        tabs.forEach((tab, index) => {
+            let div = document.createElement('div');
+            div.className = 'tab ' + (index === activeTabIndex ? 'active' : '');
+            div.innerHTML = `
+                <span onclick="switchTab(${index})">${tab.title}${tab.isModified ? '*' : ''}</span> 
+                <span class="close-tab" onclick="closeTab(${index}, event)">×</span>
+            `;
+            tabBar.appendChild(div);
+        });
+        let addBtn = document.createElement('div');
+        addBtn.className = 'tab add-tab';
+        addBtn.innerHTML = '+';
+        addBtn.onclick = () => { promptNewLayout(); };
+        tabBar.appendChild(addBtn);
+    }
+
+    // --- CAMERA ENGINE ---
+    const workspace = document.getElementById('workspace');
+    let isPanning = false, panStartX = 0, panStartY = 0;
+
+    function updateCamera() {
+        if(!getTab()) return;
+        workspace.style.transform = `translate(${getTab().panX}px, ${getTab().panY}px) scale(${getTab().zoom})`;
+    }
+
+    window.addEventListener('wheel', (e) => {
+        if (e.altKey && getTab()) {
+            e.preventDefault();
+            let t = getTab();
+            let mathX = (e.clientX - t.panX) / t.zoom;
+            let mathY = (e.clientY - t.panY) / t.zoom;
+            
+            t.zoom *= e.deltaY > 0 ? 0.9 : 1.1;
+            t.zoom = Math.max(0.2, Math.min(t.zoom, 5)); 
+            
+            t.panX = e.clientX - (mathX * t.zoom);
+            t.panY = e.clientY - (mathY * t.zoom);
+            updateCamera();
+        }
+    }, { passive: false });
+
+    // --- RENDER ENGINE ---
+    function getTextColor(hex) {
+        let r = parseInt(hex.substr(1, 2), 16), g = parseInt(hex.substr(3, 2), 16), b = parseInt(hex.substr(5, 2), 16);
+        return ((r * 0.299) + (g * 0.587) + (b * 0.114)) < 140 ? 'white' : 'black';
+    }
+
+    function render() {
+        workspace.innerHTML = ''; 
+        let t = getTab();
+        if(!t) return;
+
+        let calculatedBase = 200;
+        t.rows.forEach((row, idx) => {
+            if (row.length > 1) {
+                let reqBase = ((row.length * t.seatBuffer) / Math.PI) - (idx * t.rowSpacing);
+                if (reqBase > calculatedBase) calculatedBase = reqBase;
+            }
+        });
+        t.baseRadius = calculatedBase;
+
+        t.rows.forEach((row, rowIdx) => {
+            let count = row.length;
+            if(count === 0) return;
+            let radius = t.baseRadius + (rowIdx * t.rowSpacing);
+            let angularSpacing = t.seatBuffer / radius;
+            let totalSpread = angularSpacing * (count - 1);
+            let angleStep = totalSpread > Math.PI ? Math.PI / (count - 1) : angularSpacing;
+            let startAngle = totalSpread > Math.PI ? 0 : (Math.PI - totalSpread) / 2;
+
+            row.forEach((seat, i) => {
+                let angle = count > 1 ? startAngle + (i * angleStep) : Math.PI / 2;
+                seat.x = radius * Math.cos(angle);
+                seat.y = -radius * Math.sin(angle); 
+                createSeatElement(seat, rowIdx, i);
+            });
+        });
+        updateCamera();
+        renderTabs(); 
+    }
+
+    // --- DRAG & DROP LOGIC ---
+    let dragTarget = null;
+    let currentEditingSeat = null;
+
+    function createSeatElement(seat, rIdx, cIdx) {
+        let el = document.createElement('div');
+        el.className = 'seat';
+        if (seat.type === "Gap") {
+            el.classList.add("gap");
+            el.innerHTML = "GAP";
+        } else {
+            let bgColor = PART_COLORS[seat.part] || PART_COLORS["None"];
+            el.style.backgroundColor = bgColor;
+            el.style.color = getTextColor(bgColor);
+            el.innerHTML = `<div>${seat.name.split(' ')[0]}</div><div>${seat.part}</div>${seat.height ? `<div style="font-size:10px">${seat.height}</div>` : ''}`;
+        }
+        
+        el.style.left = seat.x + 'px';
+        el.style.top = seat.y + 'px';
+        
+        el.ondblclick = () => openSingerModal(rIdx, cIdx);
+        
+        el.onmousedown = (e) => { 
+            if(e.button === 0) { 
+                dragTarget = { el, seat, rIdx, cIdx, startX: e.clientX, startY: e.clientY }; 
+                el.style.zIndex = 1000; 
+            }
+        };
+        workspace.appendChild(el);
+    }
+
+    window.onmousedown = (e) => {
+        if (e.button === 1 && getTab()) { 
+            e.preventDefault();
+            isPanning = true;
+            panStartX = e.clientX - getTab().panX;
+            panStartY = e.clientY - getTab().panY;
+            document.body.style.cursor = 'grabbing';
+        }
+    }
+
+    window.onmousemove = (e) => {
+        if (isPanning && getTab()) {
+            getTab().panX = e.clientX - panStartX;
+            getTab().panY = e.clientY - panStartY;
+            updateCamera();
+            return;
+        }
+        if (dragTarget && getTab()) {
+            let dx = (e.clientX - dragTarget.startX) / getTab().zoom;
+            let dy = (e.clientY - dragTarget.startY) / getTab().zoom;
+            dragTarget.el.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+        }
+    };
+
+    window.onmouseup = (e) => {
+        if (isPanning) {
+            isPanning = false;
+            document.body.style.cursor = 'default';
+            return;
+        }
+        if (!dragTarget || !getTab()) return;
+        
+        let t = getTab();
+        let dx = (e.clientX - dragTarget.startX) / t.zoom;
+        let dy = (e.clientY - dragTarget.startY) / t.zoom;
+        
+        if (Math.hypot(dx, dy) > 5) { 
+            t.rows[dragTarget.rIdx].splice(dragTarget.cIdx, 1);
+            let dropMathX = (e.clientX - t.panX) / t.zoom;
+            let dropMathY = (e.clientY - t.panY) / t.zoom;
+            
+            let targetR = Math.max(0, Math.min(Math.round((Math.hypot(dropMathX, dropMathY) - t.baseRadius) / t.rowSpacing), t.rows.length - 1));
+            dragTarget.seat.x = dropMathX;
+            t.rows[targetR].push(dragTarget.seat);
+            t.rows[targetR].sort((a, b) => b.x - a.x); 
+            t.isModified = true;
+            render();
+        } else {
+            dragTarget.el.style.transform = `translate(-50%, -50%)`;
+        }
+        dragTarget = null;
+    };
+
+    // --- MODALS & EDITING ---
+    function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+    function openSingerModal(rIdx, cIdx) {
+        currentEditingSeat = { rIdx, cIdx };
+        let seat = getTab().rows[rIdx][cIdx];
+        if(seat.type === "Gap") { deleteSinger(); return; } 
+        document.getElementById('s_name').value = seat.name || "";
+        document.getElementById('s_part').value = seat.part || "None";
+        document.getElementById('s_height').value = seat.height || "";
+        document.getElementById('s_notes').value = seat.notes || "";
+        openModal('singerModal');
+    }
+
+    function saveSingerDetails() {
+        let seat = getTab().rows[currentEditingSeat.rIdx][currentEditingSeat.cIdx];
+        seat.name = document.getElementById('s_name').value;
+        seat.part = document.getElementById('s_part').value;
+        seat.height = document.getElementById('s_height').value;
+        seat.notes = document.getElementById('s_notes').value;
+        getTab().isModified = true;
+        closeModal('singerModal');
+        render();
+    }
+
+    function deleteSinger() {
+        getTab().rows[currentEditingSeat.rIdx].splice(currentEditingSeat.cIdx, 1);
+        getTab().isModified = true;
+        closeModal('singerModal');
+        render();
+    }
+
+    function promptSpacing() {
+        document.getElementById('m_radius').value = getTab().baseRadius;
+        document.getElementById('m_rowspace').value = getTab().rowSpacing;
+        document.getElementById('m_seatspace').value = getTab().seatBuffer;
+        openModal('spacingModal');
+    }
+
+    function saveSpacing() {
+        getTab().baseRadius = parseInt(document.getElementById('m_radius').value);
+        getTab().rowSpacing = parseInt(document.getElementById('m_rowspace').value);
+        getTab().seatBuffer = parseInt(document.getElementById('m_seatspace').value);
+        getTab().isModified = true;
+        closeModal('spacingModal');
+        render();
+    }
+
+    // --- MENU OPERATIONS ---
+    function distributeSeats(items, numRows) {
+        let newRows = Array.from({length: numRows}, () => []);
+        let weights = Array.from({length: numRows}, (_, i) => 2 + i);
+        let weightSum = weights.reduce((a,b)=>a+b, 0);
+        let counts = weights.map(w => Math.max(1, Math.floor(items.length * (w / weightSum))));
+        counts[counts.length-1] += items.length - counts.reduce((a,b)=>a+b,0);
+        
+        let idx = 0;
+        counts.forEach((c, r) => { for(let i=0; i<c; i++) { if(idx < items.length) newRows[r].push(items[idx++]); } });
+        getTab().rows = newRows;
+        getTab().isModified = true;
+    }
+
+    function promptNewLayout() {
+        let count = prompt("Total Seats:", "30");
+        if(count) {
+            let items = Array.from({length: parseInt(count)}, () => ({ type: "Singer", name: "", part: "None" }));
+            createNewTab("Untitled Layout", [[],[],[]]);
+            distributeSeats(items, 3);
+            render();
+        }
+    }
+
+    function promptChangeRows() {
+        let num = prompt("Number of Rows:", getTab().rows.length);
+        if(num && parseInt(num) > 0) {
+            let all = getTab().rows.flat();
+            distributeSeats(all, parseInt(num));
+            render();
+        }
+    }
+
+    function addItems(type) {
+        let count = prompt(`Add ${type} Quantity:`, "1");
+        if(count) {
+            let t = getTab();
+            for(let i=0; i<parseInt(count); i++) t.rows[t.rows.length-1].push({ type: type, name: type==="Gap"?"": "New", part: "None" });
+            t.isModified = true;
+            render();
+        }
+    }
+
+    function autoArrange() {
+        let t = getTab();
+        let all = t.rows.flat().sort((a, b) => (PART_ORDER[a.part]||99) - (PART_ORDER[b.part]||99));
+        let slots = [];
+        t.rows.forEach((r, rIdx) => r.forEach((_, i) => slots.push({ rIdx, i, x: r.length>1 ? (i/(r.length-1)) : 0.5 })));
+        slots.sort((a, b) => b.x === a.x ? b.rIdx - a.rIdx : b.x - a.x);
+        let newRows = Array(t.rows.length).fill().map(() => []);
+        slots.forEach((s, idx) => newRows[s.rIdx][s.i] = all[idx]);
+        t.rows = newRows;
+        t.isModified = true;
+        render();
+    }
+
+    // --- NATIVE FILE SYSTEM API (Save/Open) ---
+    async function openLayout() {
+        if (!window.showOpenFilePicker) {
+            alert("Your browser does not support native file saving (Safari/Firefox). Please use Chrome or Edge for the best experience.");
+            return;
+        }
+        try {
+            const [fileHandle] = await window.showOpenFilePicker({
+                types: [{ description: 'Choir Files', accept: { 'application/json': ['.choir'] } }]
+            });
+            const file = await fileHandle.getFile();
+            const text = await file.text();
+            let data = JSON.parse(text);
+            
+            createNewTab(file.name);
+            let t = getTab();
+            t.fileHandle = fileHandle; // Link the tab to this local file
+            
+            if(data.meta) { 
+                t.baseRadius = data.meta.baseRadius; t.rowSpacing = data.meta.rowSpacing; t.seatBuffer = data.meta.seatBuffer; t.rows = data.rows; 
+            } else { 
+                t.rows = data; 
+            }
+            t.isModified = false;
+            render();
+        } catch (err) {
+            console.log("User canceled file picker.");
+        }
+    }
+
+    async function saveLayout() {
+        let t = getTab();
+        if (!t) return false;
+        
+        // If we already have a linked file, overwrite it
+        if (t.fileHandle) {
+            return await writeToFile(t.fileHandle, t);
+        } else {
+            // Otherwise, trigger Save As
+            return await saveLayoutAs();
+        }
+    }
+
+    async function saveLayoutAs() {
+        let t = getTab();
+        if (!t) return false;
+        
+        if (!window.showSaveFilePicker) {
+            return legacySave(t); // Fallback for Safari/Firefox
+        }
+        
+        try {
+            const fileHandle = await window.showSaveFilePicker({
+                suggestedName: t.title === "Untitled Layout" ? "layout.choir" : t.title,
+                types: [{ description: 'Choir Files', accept: { 'application/json': ['.choir'] } }]
+            });
+            t.fileHandle = fileHandle;
+            t.title = fileHandle.name;
+            return await writeToFile(fileHandle, t);
+        } catch (err) {
+            return false;
+        }
+    }
+
+    async function writeToFile(fileHandle, t) {
+        try {
+            let data = { meta: { baseRadius: t.baseRadius, rowSpacing: t.rowSpacing, seatBuffer: t.seatBuffer }, rows: t.rows };
+            const writable = await fileHandle.createWritable();
+            await writable.write(JSON.stringify(data, null, 2));
+            await writable.close();
+            
+            t.isModified = false;
+            renderTabs();
+            return true;
+        } catch(err) {
+            alert("Failed to save file. Make sure it isn't open in another program.");
+            return false;
+        }
+    }
+    
+    // Fallback for Safari/Firefox
+    function legacySave(t) {
+        let data = { meta: { baseRadius: t.baseRadius, rowSpacing: t.rowSpacing, seatBuffer: t.seatBuffer }, rows: t.rows };
+        let blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+        let a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        let filename = prompt("Save file as:", t.title === "Untitled Layout" ? "layout.choir" : t.title);
+        if (!filename) return false; 
+        if (!filename.endsWith(".choir")) filename += ".choir";
+        a.download = filename;
+        a.click();
+        t.title = filename;
+        t.isModified = false;
+        renderTabs();
+        return true;
+    }
+
+    function exportPDF() {
+        const { jsPDF } = window.jspdf;
+        let t = getTab();
+        
+        // 1. Save the user's current camera state
+        let oldZoom = t.zoom, oldX = t.panX, oldY = t.panY;
+        
+        // 2. Find the exact mathematical boundaries of the choir
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        let hasSeats = false;
+        
+        t.rows.forEach(row => {
+            row.forEach(seat => {
+                hasSeats = true;
+                if (seat.x < minX) minX = seat.x;
+                if (seat.x > maxX) maxX = seat.x;
+                if (seat.y < minY) minY = seat.y;
+                if (seat.y > maxY) maxY = seat.y;
+            });
+        });
+
+        if (!hasSeats) {
+            alert("There are no singers on the stage to export!");
+            return;
+        }
+
+        // 3. Add padding so the outer singers don't touch the edge of the PDF
+        let padding = 100;
+        minX -= padding; maxX += padding;
+        minY -= padding; maxY += padding;
+
+        let layoutWidth = maxX - minX;
+        let layoutHeight = maxY - minY;
+        let centerX = (minX + maxX) / 2;
+        let centerY = (minY + maxY) / 2;
+
+        // 4. Calculate the perfect zoom and pan to fit the stage
+        let stageWidth = document.getElementById('stage').clientWidth;
+        let stageHeight = document.getElementById('stage').clientHeight;
+        
+        t.zoom = Math.min(stageWidth / layoutWidth, stageHeight / layoutHeight);
+        t.panX = (stageWidth / 2) - (centerX * t.zoom);
+        t.panY = (stageHeight / 2) - (centerY * t.zoom);
+        
+        updateCamera();
+        
+        // 5. Wait 150ms for the browser to move the circles, then snap the picture
+        setTimeout(() => {
+            html2canvas(document.getElementById('stage'), { scale: 2 }).then(canvas => {
+                try {
+                    let pdf = new jsPDF('l', 'mm', 'letter');
+                    let imgData = canvas.toDataURL('image/png');
+                    
+                    if (canvas.width === 0 || canvas.height === 0) throw new Error("Canvas rendering failed");
+                    
+                    let pdfWidth = pdf.internal.pageSize.getWidth();
+                    let pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+                    
+                    // Center the snapshot vertically on the PDF page
+                    let yOffset = (pdf.internal.pageSize.getHeight() - pdfHeight) / 2;
+                    
+                    pdf.addImage(imgData, 'PNG', 0, yOffset, pdfWidth, pdfHeight);
+                    pdf.save("choir_layout.pdf");
+                } catch(err) {
+                    alert("Error creating PDF: " + err.message);
+                }
+                
+                // 6. Restore the camera back to exactly where the user was looking
+                t.zoom = oldZoom; t.panX = oldX; t.panY = oldY;
+                updateCamera();
+            }).catch(err => {
+                alert("Failed to capture screen: " + err);
+                t.zoom = oldZoom; t.panX = oldX; t.panY = oldY;
+                updateCamera();
+            });
+        }, 150);
+    }
+
+    // Initialize app with one tab
+    createNewTab();
+</script>
+</body>
+</html>
