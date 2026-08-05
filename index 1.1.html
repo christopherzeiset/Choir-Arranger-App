@@ -432,14 +432,20 @@
 
     async function fetchLiveRoster(url) {
         try {
-            document.title = "Syncing..."; // Visual indicator
-            let response = await fetch(url);
+            document.title = "Syncing..."; 
+            
+            // Route through a free public proxy to bypass local file security blocks
+            let proxyUrl = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+            
+            let response = await fetch(proxyUrl);
             if(!response.ok) throw new Error("Network response was not ok. Status: " + response.status);
+            
             let csvText = await response.text();
             processCSVText(csvText);
+            
             document.title = "Choir Arranger Web";
         } catch(err) {
-            alert("Auto-Sync Failed: Could not load the Google Sheet. \n\nMake sure you copied the 'Publish to Web -> CSV' link, and NOT the regular browser URL. \n\nError: " + err.message);
+            alert("Auto-Sync Failed: The browser blocked the connection.\n\nError: " + err.message);
             console.error("Failed to auto-sync Google Sheet:", err);
             document.title = "Choir Arranger Web";
         }
